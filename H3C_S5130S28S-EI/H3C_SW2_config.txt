@@ -1,0 +1,53 @@
+# ============================================================
+# H3C S5130S-28S-EI  SW-2（Slave）コンフィグ
+# IRF2スタック構成 - 流し込み用
+# 作成日: 2026-06-08  Ver.1.0
+# 注意: SW-2 はスタック形成前に単体でコンソール接続し、
+#       Step 1〜3 のみ実施してから reboot すること。
+#       Step 4 以降は SW-1（Master）側で実施する。
+# ============================================================
+
+# ─── Step 1: IRF Member ID / Priority 設定（スタンドアロン状態で実施）───
+# ※ SW-2 のデフォルト Member ID は 1 のため 2 に変更する
+system-view
+irf member 1 renumber 2
+irf member 2 priority 1
+irf domain 1
+
+# ─── Step 2: ホスト名 ─────────────────────────────────────────────────
+sysname H3C-SW2
+
+# ─── Step 3: IRF ポート設定 ───────────────────────────────────────────
+# SW-2 の IRF-port1 → SW-1 の IRF-port2 に接続（クロス）
+# SW-2 の IRF-port2 → SW-1 の IRF-port1 に接続（クロス）
+irf-port 1/1
+ port group interface Ten-GigabitEthernet 1/0/25
+ quit
+irf-port 1/2
+ port group interface Ten-GigabitEthernet 1/0/26
+ quit
+
+# 設定保存 → IRFポート有効化
+save
+irf-port-configuration active
+
+# ─── Step 4: 再起動 ───────────────────────────────────────────────────
+# SW-1 より先に reboot すること
+# reboot
+
+# ============================================================
+# 以降の設定は SW-1（Master）から流し込む → SW1_config.txt を参照
+# SW-2 単体への追加設定は不要（スタック後は SW-1 が全体を管理）
+# ============================================================
+
+# ─── 参考: スタック形成後の確認コマンド ─────────────────────────────
+# display irf                   → Member 数・Role（Master/Slave）確認
+# display irf topology          → IRFリンクの UP/DOWN 確認
+# display irf configuration     → IRFポート割り当て確認
+# display interface brief       → ポート番号が 2/0/x になっているか確認
+# display ntp-service status    → Clock status: synchronized を確認
+# display current-configuration → 設定全体を確認
+
+# ============================================================
+# End of Config  /  H3C-SW2
+# ============================================================

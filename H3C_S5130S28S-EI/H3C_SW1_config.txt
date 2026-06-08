@@ -1,0 +1,211 @@
+# ============================================================
+# H3C S5130S-28S-EI  SW-1（Master）コンフィグ
+# IRF2スタック構成 - 流し込み用
+# 作成日: 2026-06-08  Ver.1.0
+# 注意: 流し込み前にIPアドレス・パスワード等を実環境に合わせて変更すること
+# ============================================================
+
+# ─── Step 1: IRF Member ID / Priority 設定（スタンドアロン状態で実施）───
+# ※ この設定は再起動後に有効になる
+irf member 1 renumber 1
+irf member 1 priority 32
+irf domain 1
+
+# ─── Step 2: ホスト名 ─────────────────────────────────────────────────
+system-view
+sysname H3C-SW1
+
+# ─── Step 3: IRF ポート設定 ───────────────────────────────────────────
+irf-port 1/1
+ port group interface Ten-GigabitEthernet 1/0/25
+ quit
+irf-port 1/2
+ port group interface Ten-GigabitEthernet 1/0/26
+ quit
+
+# 設定保存 → IRFポート有効化（この後 save & irf-port-configuration active を実行）
+save
+irf-port-configuration active
+
+# ─── Step 4: 再起動（Step 4以降はスタック形成後に Master で実施）────────
+# reboot  ← スタックケーブル接続後、SW-2 を先に reboot してから本機を reboot
+
+# ===========================================================
+# 以下はスタック形成後に Master（SW-1）で流し込む
+# ===========================================================
+
+# ─── VLAN 作成 ────────────────────────────────────────────────────────
+vlan 10
+ name Mgmt
+ quit
+vlan 20
+ name Servers-FE
+ quit
+vlan 30
+ name Servers-DB
+ quit
+
+# ─── VLAN インタフェース（SVI）────────────────────────────────────────
+interface Vlan-interface 10
+ description Mgmt-Segment
+ ip address 192.168.10.1 255.255.255.0
+ quit
+
+interface Vlan-interface 20
+ description Servers-FE-Segment
+ ip address 192.168.20.1 255.255.255.0
+ packet-filter 3000 inbound
+ quit
+
+interface Vlan-interface 30
+ description Servers-DB-Segment
+ ip address 192.168.30.1 255.255.255.0
+ packet-filter 3001 inbound
+ quit
+
+# ─── デフォルトゲートウェイ ──────────────────────────────────────────
+ip route-static 0.0.0.0 0.0.0.0 192.168.10.254
+
+# ─── ACL 設定 ─────────────────────────────────────────────────────────
+# ACL 3000: VLAN20（Web/APサーバー）への流入制御
+acl advanced 3000
+ description Server-FE-Inbound
+ rule 10 deny tcp source any destination 192.168.20.0 0.0.0.255 destination-port eq 22
+ rule 20 deny tcp source any destination 192.168.20.0 0.0.0.255 destination-port eq 3389
+ rule 100 permit ip source any destination any
+ quit
+
+# ACL 3001: VLAN30（DBサーバー）への流入制御
+acl advanced 3001
+ description Server-DB-Inbound
+ rule 10 permit tcp source 192.168.20.0 0.0.0.255 destination 192.168.30.0 0.0.0.255 destination-port eq 3306
+ rule 20 permit tcp source 192.168.10.0 0.0.0.255 destination any
+ rule 100 deny ip source any destination 192.168.30.0 0.0.0.255
+ quit
+
+# ─── ポート設定: SW-1 配下 ────────────────────────────────────────────
+# GE1/0/1: Webサーバー（VLAN20 Access）
+interface GigabitEthernet 1/0/1
+ description Web-Server
+ port link-type access
+ port access vlan 20
+ quit
+
+# GE1/0/2: APサーバー（VLAN20 Access）
+interface GigabitEthernet 1/0/2
+ description AP-Server
+ port link-type access
+ port access vlan 20
+ quit
+
+# GE1/0/3: 管理PC（VLAN10 Access）
+interface GigabitEthernet 1/0/3
+ description Mgmt-PC
+ port link-type access
+ port access vlan 10
+ quit
+
+# GE1/0/4 〜 GE1/0/24: 未使用ポート shutdown
+interface range GigabitEthernet 1/0/4 to GigabitEthernet 1/0/24
+ description Unused
+ shutdown
+ quit
+
+# XGE1/0/25・26: IRFリンク（設定済み。変更不要）
+# ※ IRFポートはデータ通信に使用不可
+
+# XGE1/0/27: アップリンク（CoreSW向け Trunk）
+interface Ten-GigabitEthernet 1/0/27
+ description Uplink-to-CoreSW
+ port link-type trunk
+ port trunk permit vlan 10 20 30
+ undo port trunk permit vlan 1
+ quit
+
+# XGE1/0/28: 予備（未使用）
+interface Ten-GigabitEthernet 1/0/28
+ description Unused-Spare
+ shutdown
+ quit
+
+# ─── ポート設定: SW-2 配下（スタック後は SW-1 から設定可能）─────────
+# GE2/0/1: DBサーバー（VLAN30 Access）
+interface GigabitEthernet 2/0/1
+ description DB-Server
+ port link-type access
+ port access vlan 30
+ quit
+
+# GE2/0/2 〜 GE2/0/24: 未使用ポート shutdown
+interface range GigabitEthernet 2/0/2 to GigabitEthernet 2/0/24
+ description Unused
+ shutdown
+ quit
+
+# XGE2/0/25・26: IRFリンク（設定済み。変更不要）
+
+# XGE2/0/27: アップリンク（CoreSW向け Trunk）
+interface Ten-GigabitEthernet 2/0/27
+ description Uplink-to-CoreSW
+ port link-type trunk
+ port trunk permit vlan 10 20 30
+ undo port trunk permit vlan 1
+ quit
+
+# XGE2/0/28: 予備（未使用）
+interface Ten-GigabitEthernet 2/0/28
+ description Unused-Spare
+ shutdown
+ quit
+
+# ─── MAD 設定（LACP-MAD）★必須 ──────────────────────────────────────
+# CoreSW側でも LACP 設定が必要
+interface Bridge-Aggregation 1
+ description MAD-Link-to-CoreSW
+ link-aggregation mode dynamic
+ irf mad enable
+ quit
+
+interface Ten-GigabitEthernet 1/0/27
+ port link-aggregation group 1
+ quit
+
+# ─── NTP 設定 ─────────────────────────────────────────────────────────
+clock timezone JST add 09:00:00
+ntp-service unicast-server 192.168.10.100 preference
+ntp-service unicast-server 192.168.10.101
+
+# ─── SNMP 設定 ────────────────────────────────────────────────────────
+snmp-agent
+snmp-agent sys-info version v2c
+snmp-agent community read public
+snmp-agent community write network-mgmt@2026
+snmp-agent sys-info location Server-Room-RackA
+snmp-agent sys-info contact nw-admin@example.com
+snmp-agent target-host trap address udp-domain 192.168.10.200 params securityname public
+
+# ─── SSH 設定 ─────────────────────────────────────────────────────────
+public-key local create rsa
+ssh server enable
+user-interface vty 0 4
+ authentication-mode scheme
+ protocol inbound ssh
+ quit
+
+# ─── ローカルユーザー設定 ─────────────────────────────────────────────
+# ※ パスワードは必ず実環境の規定に合わせて変更すること
+local-user admin class manage
+ password simple Admin@H3C2026
+ service-type ssh telnet terminal
+ authorization-attribute user-role network-admin
+ quit
+
+# ─── syslog 設定 ──────────────────────────────────────────────────────
+info-center loghost 192.168.10.200
+
+# ─── 設定保存 ─────────────────────────────────────────────────────────
+save
+
+# ============================================================
+# End of Config  /  H3C-SW1
+# ============================================================
